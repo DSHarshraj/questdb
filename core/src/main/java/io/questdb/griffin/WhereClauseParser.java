@@ -217,6 +217,8 @@ public final class WhereClauseParser implements Mutable {
                 || typeTag == ColumnType.STRING
                 || typeTag == ColumnType.SYMBOL
                 || typeTag == ColumnType.LONG
+                || typeTag == ColumnType.INT
+                || typeTag == ColumnType.SHORT
                 || typeTag == ColumnType.VARCHAR;
     }
 
@@ -344,7 +346,7 @@ public final class WhereClauseParser implements Mutable {
         return analyzeBetween0(model, col, node, false, functionParser, metadata, executionContext);
     }
 
-    private boolean analyzeBetween0(
+   private boolean analyzeBetween0(
             IntrinsicModel model,
             ExpressionNode col,
             ExpressionNode between,
@@ -353,30 +355,32 @@ public final class WhereClauseParser implements Mutable {
             RecordMetadata metadata,
             SqlExecutionContext executionContext
     ) throws SqlException {
-        if (!isTimestamp(col)) {
+        int columnType = ColumnType.tagOf(metadata.getColumnType(metadata.getColumnIndexQuiet(col.token)));
+        if (!isTimestamp(col) && columnType != ColumnType.SHORT) {
             return false;
         }
 
         ExpressionNode lo = between.args.getQuick(1);
         ExpressionNode hi = between.args.getQuick(0);
 
-        try {
-            model.setBetweenNegated(isNegated);
-            boolean isBetweenTranslated = translateBetweenToTimestampModel(model, functionParser, metadata, executionContext, lo);
-            if (isBetweenTranslated) {
-                isBetweenTranslated = translateBetweenToTimestampModel(model, functionParser, metadata, executionContext, hi);
-            }
+        long loVal = columnType == ColumnType.SHORT
+                ? (long) Numbers.parseInt(lo.token)
+                : getTimestampFromConstFunction(functionParser.parseFunction(lo, metadata, executionContext), lo.position, false);
 
-            if (isBetweenTranslated) {
-                between.intrinsicValue = IntrinsicModel.TRUE;
-                return true;
-            }
-        } finally {
-            model.clearBetweenTempParsing();
+        long hiVal = columnType == ColumnType.SHORT
+                ? (long) Numbers.parseInt(hi.token)
+                : getTimestampFromConstFunction(functionParser.parseFunction(hi, metadata, executionContext), hi.position, false);
+
+        if (!isNegated) {
+            model.intersectIntervals(loVal, hiVal);
+        } else {
+            model.subtractIntervals(loVal, hiVal);
         }
-
-        return false;
+        between.intrinsicValue = IntrinsicModel.TRUE;
+        return true;
     }
+}
+
 
     private boolean analyzeEquals(
             AliasTranslator translator,
